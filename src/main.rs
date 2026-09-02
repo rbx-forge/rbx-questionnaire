@@ -1,0 +1,344 @@
+use anyhow::{bail, Context, Result};
+use clap::{Args, Parser, Subcommand};
+use std::path::{Path, PathBuf};
+use std::process::ExitCode;
+
+use rbx_questionnaire::api::{resolve_cookie, Api};
+use rbx_questionnaire::config::{Config, DEFAULT_FILE};
+use rbx_questionnaire::model::Questionnaire;
+use rbx_questionnaire::plan::{plan, Plan, Problem};
+use rbx_questionnaire::{env, file};
+
+#[derive(Parser)]
+#[command(
+    name = "rbx-questionnaire",
+    version,
+    about = "Declare, review and submit a Roblox experience's content questionnaire",
+    long_about = "Roblox turns this questionnaire's answers into your experience's age \
+                  rating, so the answers live in a file you commit rather than in a flag. \
+                  Nothing is defaulted: an unanswered question stops a submission."
+)]
+struct Cli {
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Write or update rbxquestionnaire.toml from the live questionnaire.
+    ///
+    /// Only ever appends. An answer already in the file is never rewritten and
+    /// never removed, because either would change a declaration filed under
+    /// your name without you saying so.
+    Pull(Pull),
+    /// Print the questions, and what your file answers to each.
+    Show(Common),
+    /// Exit non-zero unless every question Roblox asks is answered. The CI contract.
+    Check(Common),
+    /// Validate, show the resulting age rating, and file the declaration.
+    Submit(Submit),
+}
+
+#[derive(Args)]
+struct Common {
+    /// The universe to ask about. Takes precedence over --env.
+    #[arg(long, value_name = "ID")]
+    universe_id: Option<u64>,
+
+    /// An environment name in rbxplace.toml to resolve the universe from.
+    #[arg(long, value_name = "NAME")]
+    env: Option<String>,
+
+    /// Where rbxplace.toml lives.
+    #[arg(long, value_name = "PATH", default_value = env::DEFAULT_FILE)]
+    places_file: PathBuf,
+
+    /// The answers file.
+    #[arg(long, short = 'c', value_name = "PATH", default_value = DEFAULT_FILE)]
+    config: PathBuf,
+
+    /// A .ROBLOSECURITY cookie. Falls back to $RBX_COOKIE, then to a local
+    /// Studio install.
+    #[arg(
+        long,
+        value_name = "COOKIE",
+        env = "RBX_COOKIE",
+        hide_env_values = true
+    )]
+    cookie: Option<String>,
+}
+
+#[derive(Args)]
+struct Pull {
+    #[command(flatten)]
+    common: Common,
+}
+
+#[derive(Args)]
+struct Submit {
+    #[command(flatten)]
+    common: Common,
+
+    /// Validate and show the rating, then stop without filing anything.
+    #[arg(long)]
+    dry_run: bool,
+
+    /// Skip the confirmation prompt. For CI, where nobody is there to answer.
+    #[arg(long, short = 'y')]
+    yes: bool,
+}
+
+#[tokio::main]
+async fn main() -> ExitCode {
+    let cli = Cli::parse();
+
+    let result = match cli.command {
+        Command::Pull(args) => run_pull(args).await,
+        Command::Show(args) => run_show(args).await,
+        Command::Check(args) => run_check(args).await,
+        Command::Submit(args) => run_submit(args).await,
+    };
+
+    match result {
+        Ok(code) => code,
+        Err(e) => {
+            eprintln!("Error: {e:#}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Everything a command needs from Roblox, fetched once.
+struct Live {
+    universe_id: u64,
+    questionnaire: Questionnaire,
+    api: Api,
+}
+
+async fn fetch(common: &Common) -> Result<Live> {
+    let universe_id = match (common.universe_id, &common.env) {
+        (Some(id), _) => id,
+        (None, Some(name)) => env::universe_id(&common.places_file, name)?,
+        (None, None) => bail!("pass --universe-id, or --env with an rbxplace.toml"),
+    };
+
+    let api = Api::new(resolve_cookie(common.cookie.clone())?)?;
+    let id = api.latest_id(universe_id).await?;
+    let questionnaire = api.questionnaire(&id).await?;
+
+    Ok(Live {
+        universe_id,
+        questionnaire,
+        api,
+    })
+}
+
+fn load_config(path: &Path) -> Result<Config> {
+    if !path.exists() {
+        bail!(
+            "{} does not exist. Run `rbx-questionnaire pull` to write one from the \
+             live questionnaire, then fill in the answers.",
+            path.display()
+        );
+    }
+    Config::load(path)
+}
+
+async fn run_pull(args: Pull) -> Result<ExitCode> {
+    let live = fetch(&args.common).await?;
+    let path = &args.common.config;
+
+    let existing = if path.exists() {
+        Some(std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?)
+    } else {
+        None
+    };
+
+    let (text, added) = file::merge(existing.as_deref(), &live.questionnaire)?;
+    std::fs::write(path, &text).with_context(|| format!("writing {}", path.display()))?;
+
+    let total = live.questionnaire.all_questions().len();
+    match (existing.is_some(), added) {
+        (false, n) => println!(
+            "Wrote {} with {n} question(s), all unanswered.",
+            path.display()
+        ),
+        (true, 0) => println!("{} is up to date ({total} question(s)).", path.display()),
+        (true, n) => println!(
+            "Added {n} new question(s) to {}. Nothing already there was touched.",
+            path.display()
+        ),
+    }
+
+    if added > 0 {
+        println!("Fill in each `answer`, then run `check`.");
+    }
+
+    Ok(ExitCode::SUCCESS)
+}
+
+async fn run_show(args: Common) -> Result<ExitCode> {
+    let live = fetch(&args).await?;
+    let config = load_config(&args.config)?;
+    let plan = plan(&live.questionnaire, &config);
+
+    println!(
+        "Universe {}, questionnaire {}",
+        live.universe_id, live.questionnaire.id
+    );
+    println!();
+
+    for reached in &plan.reached {
+        let topic = if reached.topic.is_empty() {
+            "?"
+        } else {
+            &reached.topic
+        };
+        println!("  {topic:<28} {}", reached.answer);
+    }
+
+    if !plan.problems.is_empty() {
+        println!();
+        print_problems(&plan);
+    }
+
+    Ok(ExitCode::SUCCESS)
+}
+
+async fn run_check(args: Common) -> Result<ExitCode> {
+    let live = fetch(&args).await?;
+    let config = load_config(&args.config)?;
+    let plan = plan(&live.questionnaire, &config);
+
+    let blocking = plan.blocking().count();
+
+    if plan.problems.is_empty() {
+        println!(
+            "{} question(s) asked, {} answered.",
+            live.questionnaire.all_questions().len(),
+            plan.answers.len()
+        );
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    print_problems(&plan);
+
+    if blocking > 0 {
+        Ok(ExitCode::FAILURE)
+    } else {
+        Ok(ExitCode::SUCCESS)
+    }
+}
+
+async fn run_submit(args: Submit) -> Result<ExitCode> {
+    let live = fetch(&args.common).await?;
+    let config = load_config(&args.common.config)?;
+    let plan = plan(&live.questionnaire, &config);
+
+    if !plan.is_submittable() {
+        print_problems(&plan);
+        bail!("refusing to submit an incomplete declaration");
+    }
+
+    // Roblox's own opinion first: this tool's idea of "complete" is not the one
+    // that counts.
+    let validation = live
+        .api
+        .validate(&live.questionnaire.id, &plan.answers)
+        .await?;
+    if !validation.is_valid {
+        for failure in &validation.failures {
+            eprintln!("  {failure}");
+        }
+        bail!("Roblox rejected these answers as invalid");
+    }
+
+    let preview = live
+        .api
+        .preview(live.universe_id, &live.questionnaire.id, &plan.answers)
+        .await?;
+
+    println!("About to declare, for universe {}:", live.universe_id);
+    for reached in &plan.reached {
+        let topic = if reached.topic.is_empty() {
+            "?"
+        } else {
+            &reached.topic
+        };
+        println!("  {topic:<28} {}", reached.answer);
+    }
+    println!();
+    match preview.age_rating() {
+        Some(rating) => println!("Resulting age rating: {rating}"),
+        None => println!("Roblox did not return a rating for these answers."),
+    }
+    if preview.disable_submit_button {
+        println!("Roblox marks this response as not submittable.");
+    }
+
+    if args.dry_run {
+        println!("\nDry run, nothing filed.");
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    if !args.yes {
+        println!();
+        let confirmed = dialoguer::Confirm::new()
+            .with_prompt("File this declaration with Roblox?")
+            .default(false)
+            .interact()
+            .context("reading the confirmation")?;
+
+        if !confirmed {
+            println!("Nothing filed.");
+            return Ok(ExitCode::SUCCESS);
+        }
+    }
+
+    let response = live
+        .api
+        .submit(live.universe_id, &live.questionnaire.id, &plan.answers)
+        .await?;
+
+    if response.submission_id.is_empty() {
+        println!("Submitted.");
+    } else {
+        println!("Submitted ({}).", response.submission_id);
+    }
+
+    Ok(ExitCode::SUCCESS)
+}
+
+fn print_problems(plan: &Plan) {
+    for problem in &plan.problems {
+        match problem {
+            Problem::Unanswered {
+                topic,
+                text,
+                options,
+                ..
+            } => {
+                eprintln!("  unanswered: {topic}");
+                eprintln!("      {text}");
+                if !options.is_empty() {
+                    eprintln!("      options: {}", options.join(", "));
+                }
+            }
+            Problem::UnknownAnswer {
+                topic,
+                answer,
+                options,
+                ..
+            } => {
+                eprintln!("  '{answer}' is not an option for: {topic}");
+                eprintln!("      options: {}", options.join(", "));
+            }
+            Problem::Stale { id, topic } => {
+                eprintln!("  no longer asked: {topic} ({id})");
+                eprintln!(
+                    "      harmless, but the questionnaire has changed since this was written"
+                );
+            }
+        }
+    }
+}
