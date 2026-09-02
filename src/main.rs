@@ -72,6 +72,17 @@ struct Common {
 struct Pull {
     #[command(flatten)]
     common: Common,
+
+    /// Write this answer into every question still blank that offers it,
+    /// typically `--fill no`.
+    ///
+    /// The shortcut for a questionnaire that really is "no" throughout. It is a
+    /// flag rather than a default because the answers land in the file, where
+    /// they are committed and can be read and disagreed with. An answer nobody
+    /// typed is not a declaration; a file somebody generated and kept is.
+    /// Existing answers are never overwritten.
+    #[arg(long, value_name = "ANSWER")]
+    fill: Option<String>,
 }
 
 #[derive(Args)]
@@ -154,15 +165,16 @@ async fn run_pull(args: Pull) -> Result<ExitCode> {
         None
     };
 
-    let (text, added) = file::merge(existing.as_deref(), &live.questionnaire)?;
+    let (text, merged) = file::merge(
+        existing.as_deref(),
+        &live.questionnaire,
+        args.fill.as_deref(),
+    )?;
     std::fs::write(path, &text).with_context(|| format!("writing {}", path.display()))?;
 
     let total = live.questionnaire.all_questions().len();
-    match (existing.is_some(), added) {
-        (false, n) => println!(
-            "Wrote {} with {n} question(s), all unanswered.",
-            path.display()
-        ),
+    match (existing.is_some(), merged.added) {
+        (false, n) => println!("Wrote {} with {n} question(s).", path.display()),
         (true, 0) => println!("{} is up to date ({total} question(s)).", path.display()),
         (true, n) => println!(
             "Added {n} new question(s) to {}. Nothing already there was touched.",
@@ -170,8 +182,27 @@ async fn run_pull(args: Pull) -> Result<ExitCode> {
         ),
     }
 
-    if added > 0 {
-        println!("Fill in each `answer`, then run `check`.");
+    if merged.filled > 0 {
+        println!(
+            "Answered {} of them with '{}'. Read them before submitting: they are \
+             what your game declares.",
+            merged.filled,
+            args.fill.as_deref().unwrap_or_default()
+        );
+    }
+
+    if !merged.unfilled.is_empty() {
+        // Not a failure. These are the follow-ups whose choices are not the word
+        // that was asked for, and they only matter if something above them is
+        // answered yes.
+        let mut topics = merged.unfilled.clone();
+        topics.sort();
+        topics.dedup();
+        println!("Left blank, no matching option: {}.", topics.join(", "));
+    }
+
+    if merged.added > merged.filled {
+        println!("Fill in each remaining `answer`, then run `check`.");
     }
 
     Ok(ExitCode::SUCCESS)

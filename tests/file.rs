@@ -45,8 +45,8 @@ fn a_first_pull_writes_every_question_unanswered() {
         ("Blood", "b", "Any blood?"),
     ]);
 
-    let (text, added) = merge(None, &q).unwrap();
-    assert_eq!(added, 2);
+    let (text, added) = merge(None, &q, None).unwrap();
+    assert_eq!(added.added, 2);
 
     let config: Config = toml::from_str(&text).expect("the output must parse back");
     assert_eq!(config.questions.len(), 2);
@@ -75,8 +75,8 @@ answer = "yes"   # we do have some
         ("Blood", "b", "Any blood?"),
     ]);
 
-    let (text, added) = merge(Some(existing), &q).unwrap();
-    assert_eq!(added, 1, "only the new question");
+    let (text, added) = merge(Some(existing), &q, None).unwrap();
+    assert_eq!(added.added, 1, "only the new question");
 
     let config: Config = toml::from_str(&text).unwrap();
     assert_eq!(config.get("v").unwrap().answer, "yes");
@@ -90,10 +90,10 @@ answer = "yes"   # we do have some
 #[test]
 fn a_pull_with_nothing_new_adds_nothing() {
     let q = questionnaire(vec![("Violence", "v", "Any violence?")]);
-    let (first, _) = merge(None, &q).unwrap();
-    let (second, added) = merge(Some(&first), &q).unwrap();
+    let (first, _) = merge(None, &q, None).unwrap();
+    let (second, added) = merge(Some(&first), &q, None).unwrap();
 
-    assert_eq!(added, 0);
+    assert_eq!(added.added, 0);
     assert_eq!(first, second, "a no-op pull must not touch the file");
 }
 
@@ -109,7 +109,7 @@ answer = "no"
 "#;
 
     let q = questionnaire(vec![("Violence", "v", "Any violence?")]);
-    let (text, _) = merge(Some(existing), &q).unwrap();
+    let (text, _) = merge(Some(existing), &q, None).unwrap();
 
     let config: Config = toml::from_str(&text).unwrap();
     assert!(config.get("gone").is_some(), "{text}");
@@ -132,8 +132,8 @@ fn follow_up_questions_are_written_too() {
         }],
     };
 
-    let (text, added) = merge(None, &q).unwrap();
-    assert_eq!(added, 2);
+    let (text, added) = merge(None, &q, None).unwrap();
+    assert_eq!(added.added, 2);
 
     let config: Config = toml::from_str(&text).unwrap();
     assert_eq!(config.get("v-realistic").unwrap().topic, "Violence");
@@ -164,7 +164,7 @@ fn a_multi_line_question_is_commented_on_every_line() {
         }],
     };
 
-    let (text, _) = merge(None, &q).unwrap();
+    let (text, _) = merge(None, &q, None).unwrap();
 
     // The whole point: it must survive a round trip.
     let config: Config = toml::from_str(&text).expect("the output must parse back");
@@ -183,12 +183,108 @@ fn a_multi_line_question_is_commented_on_every_line() {
     );
 }
 
+/// The shortcut for a questionnaire that really is "no" throughout, and the
+/// reason it is a flag rather than a default: the answers land in the file,
+/// where they are committed and can be read and disagreed with.
+#[test]
+fn fill_writes_the_answer_into_the_file_rather_than_assuming_it() {
+    let q = questionnaire(vec![
+        ("Violence", "v", "Any violence?"),
+        ("Blood", "b", "Any blood?"),
+    ]);
+
+    let (text, merged) = merge(None, &q, Some("no")).unwrap();
+
+    assert_eq!(merged.added, 2);
+    assert_eq!(merged.filled, 2);
+
+    let config: Config = toml::from_str(&text).unwrap();
+    assert_eq!(config.get("v").unwrap().answer, "No");
+    assert_eq!(config.get("b").unwrap().answer, "No");
+}
+
+/// Fill is not allowed to restate an answer somebody already wrote, which is the
+/// same rule that governs the rest of a pull.
+#[test]
+fn fill_never_overwrites_an_answer_already_there() {
+    let existing = r#"
+[[question]]
+id = "v"
+topic = "Violence"
+answer = "yes"
+"#;
+
+    let q = questionnaire(vec![("Violence", "v", "Any violence?")]);
+    let (text, merged) = merge(Some(existing), &q, Some("no")).unwrap();
+
+    assert_eq!(merged.filled, 0);
+    let config: Config = toml::from_str(&text).unwrap();
+    assert_eq!(config.get("v").unwrap().answer, "yes");
+}
+
+/// A blank already in the file is filled, so a second `pull --fill` finishes
+/// what a first one could not reach.
+#[test]
+fn fill_completes_blanks_that_were_already_in_the_file() {
+    let q = questionnaire(vec![("Violence", "v", "Any violence?")]);
+
+    let (first, _) = merge(None, &q, None).unwrap();
+    let (second, merged) = merge(Some(&first), &q, Some("no")).unwrap();
+
+    assert_eq!(merged.added, 0);
+    assert_eq!(merged.filled, 1);
+    let config: Config = toml::from_str(&second).unwrap();
+    assert_eq!(config.get("v").unwrap().answer, "No");
+}
+
+/// A question with no matching option is left blank and named, not forced. The
+/// real follow-ups offer Mild/Moderate, and "no" is not one of them.
+#[test]
+fn fill_leaves_a_question_it_cannot_answer_blank_and_says_which() {
+    let mut violence = yes_no("v", "Any violence?");
+    violence.options[0].child_questions = vec![Question {
+        id: "v-level".to_string(),
+        text: "How intense?".to_string(),
+        question_type: "SingleSelect".to_string(),
+        options: vec![
+            Opt {
+                id: "mild".to_string(),
+                text: "Mild".to_string(),
+                child_questions: Vec::new(),
+            },
+            Opt {
+                id: "moderate".to_string(),
+                text: "Moderate".to_string(),
+                child_questions: Vec::new(),
+            },
+        ],
+    }];
+
+    let q = Questionnaire {
+        id: "q1".to_string(),
+        sections: vec![Section {
+            id: "s".to_string(),
+            name: "Violence".to_string(),
+            questions: vec![violence],
+        }],
+    };
+
+    let (text, merged) = merge(None, &q, Some("no")).unwrap();
+
+    assert_eq!(merged.filled, 1, "only the yes/no question");
+    assert_eq!(merged.unfilled, vec!["Violence".to_string()]);
+
+    let config: Config = toml::from_str(&text).unwrap();
+    assert_eq!(config.get("v").unwrap().answer, "No");
+    assert_eq!(config.get("v-level").unwrap().answer, "");
+}
+
 #[test]
 fn a_file_that_is_not_an_array_of_tables_is_an_error_not_a_silent_overwrite() {
     let broken = "question = 3\n";
     let q = questionnaire(vec![("Violence", "v", "Any violence?")]);
 
-    let err = merge(Some(broken), &q).unwrap_err();
+    let err = merge(Some(broken), &q, None).unwrap_err();
     assert!(
         format!("{err}").contains("array of tables"),
         "unexpected error: {err}"

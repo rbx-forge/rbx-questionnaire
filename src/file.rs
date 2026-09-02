@@ -14,7 +14,7 @@
 use anyhow::{Context, Result};
 use toml_edit::{value, ArrayOfTables, DocumentMut, Item, Table};
 
-use crate::model::Questionnaire;
+use crate::model::{Match, Questionnaire};
 
 const HEADER: &str = "\
 # What this experience declares about its content.
@@ -33,10 +33,33 @@ const HEADER: &str = "\
 
 ";
 
+/// What a pull did.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Merged {
+    /// Entries that were not in the file before.
+    pub added: usize,
+    /// Blank answers `--fill` wrote a value into.
+    pub filled: usize,
+    /// Questions `--fill` had no matching option for, so left blank. These are
+    /// the follow-ups whose options are not the word you asked for.
+    pub unfilled: Vec<String>,
+}
+
 /// Add an entry for every question not already in `existing`.
 ///
-/// Returns the new document and how many entries were added.
-pub fn merge(existing: Option<&str>, questionnaire: &Questionnaire) -> Result<(String, usize)> {
+/// `fill` writes that answer into every question that is still blank and offers
+/// a matching option. It is the shortcut for a questionnaire that really is "no"
+/// throughout, and it is spelled as a flag on purpose: the answers land in the
+/// file, where they are committed, reviewed and disagreed with, rather than
+/// being invented at submission time. A default nobody typed is not a
+/// declaration; a file somebody generated and kept is.
+///
+/// It never overwrites an answer that is already there.
+pub fn merge(
+    existing: Option<&str>,
+    questionnaire: &Questionnaire,
+    fill: Option<&str>,
+) -> Result<(String, Merged)> {
     let mut doc: DocumentMut = match existing {
         Some(text) => text.parse().context("parsing the existing config")?,
         None => {
@@ -59,7 +82,44 @@ pub fn merge(existing: Option<&str>, questionnaire: &Questionnaire) -> Result<(S
         .filter_map(|t| t.get("id").and_then(|v| v.as_str()).map(str::to_string))
         .collect();
 
-    let mut added = 0;
+    let mut report = Merged::default();
+
+    // Fill blanks that are already in the file, before adding anything, so a
+    // second `pull --fill` finishes what a first one could not reach.
+    if let Some(wanted) = fill {
+        for table in tables.iter_mut() {
+            let Some(id) = table.get("id").and_then(|v| v.as_str()).map(str::to_string) else {
+                continue;
+            };
+            let blank = table
+                .get("answer")
+                .and_then(|v| v.as_str())
+                .is_none_or(|a| a.trim().is_empty());
+            if !blank {
+                continue;
+            }
+            let Some(question) = questionnaire
+                .all_questions()
+                .into_iter()
+                .find(|q| q.id == id)
+            else {
+                continue;
+            };
+
+            match question.match_answer(wanted) {
+                Match::One(option) => {
+                    table.insert("answer", value(&option.text));
+                    report.filled += 1;
+                }
+                _ => report.unfilled.push(
+                    questionnaire
+                        .section_of(&id)
+                        .unwrap_or(id.as_str())
+                        .to_string(),
+                ),
+            }
+        }
+    }
 
     // Every question in the tree, follow-ups included, so the file is complete
     // whichever way its answers go. A follow-up nobody reaches costs three
@@ -76,7 +136,27 @@ pub fn merge(existing: Option<&str>, questionnaire: &Questionnaire) -> Result<(S
             "topic",
             value(questionnaire.section_of(&question.id).unwrap_or_default()),
         );
-        table.insert("answer", value(""));
+
+        let answer = match fill.map(|wanted| question.match_answer(wanted)) {
+            Some(Match::One(option)) => {
+                report.filled += 1;
+                option.text.clone()
+            }
+            Some(_) => {
+                // No option matches what was asked for. These are the follow-ups
+                // whose choices are Mild/Moderate rather than yes/no, and they
+                // are only reached if something above them says yes.
+                report.unfilled.push(
+                    questionnaire
+                        .section_of(&question.id)
+                        .unwrap_or(question.id.as_str())
+                        .to_string(),
+                );
+                String::new()
+            }
+            None => String::new(),
+        };
+        table.insert("answer", value(&answer));
 
         // The question itself, as a comment, so the file can be read and
         // reviewed without calling Roblox.
@@ -88,10 +168,10 @@ pub fn merge(existing: Option<&str>, questionnaire: &Questionnaire) -> Result<(S
         table.decor_mut().set_prefix(prefix);
 
         tables.push(table);
-        added += 1;
+        report.added += 1;
     }
 
-    Ok((doc.to_string(), added))
+    Ok((doc.to_string(), report))
 }
 
 /// Comment out every line of `text`, not just the first.

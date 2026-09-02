@@ -69,6 +69,35 @@ change a declaration filed under your name without you saying so. Entries Roblox
 no longer asks are reported by `check`, not deleted. It edits the document rather
 than re-serializing it, so the note you left beside an answer survives.
 
+### Starting from "no"
+
+Most experiences answer no to most of it, and filling fourteen answers by hand to
+say so is a poor first five minutes:
+
+```sh
+$ rbx-questionnaire pull --env prod --fill no
+Wrote rbxquestionnaire.toml with 26 question(s).
+Answered 18 of them with 'no'. Read them before submitting: they are what your game declares.
+Left blank, no matching option: AI Interaction, Blood, Crude Humor, Fear, Violence.
+```
+
+This is a flag and not a default, and the difference is the whole point. The
+answers land **in the file**, where they are committed, read in a diff, and
+disagreed with by a reviewer. An answer nobody typed is not a declaration; a file
+somebody generated and kept is. It never overwrites an answer already there, and
+it leaves blank every question whose options are not the word you asked for.
+
+Then, on every deploy after that, the file is the answer:
+
+```sh
+rbx-questionnaire check  --env prod          # in CI, exits non-zero if incomplete
+rbx-questionnaire submit --env prod --yes    # no prompt, files what the file says
+```
+
+Roblox keeps the last submission, so this is not something to run on every
+upload. `check` in CI is the part that belongs in a pipeline; `submit` belongs to
+the day the answers change.
+
 `submit` asks Roblox to validate first, because this tool's idea of "complete" is
 not the one that counts, then prints the age rating the answers would produce
 before anything is filed. `--dry-run` stops there. `--yes` skips the prompt, for
