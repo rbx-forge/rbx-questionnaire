@@ -80,10 +80,10 @@ pub fn merge(existing: Option<&str>, questionnaire: &Questionnaire) -> Result<(S
 
         // The question itself, as a comment, so the file can be read and
         // reviewed without calling Roblox.
-        let mut prefix = format!("\n# {}\n", question.text.trim());
+        let mut prefix = format!("\n{}", comment(&question.text));
         let options = question.option_texts();
         if !options.is_empty() {
-            prefix.push_str(&format!("# options: {}\n", options.join(", ")));
+            prefix.push_str(&comment(&format!("options: {}", options.join(", "))));
         }
         table.decor_mut().set_prefix(prefix);
 
@@ -92,4 +92,27 @@ pub fn merge(existing: Option<&str>, questionnaire: &Questionnaire) -> Result<(S
     }
 
     Ok((doc.to_string(), added))
+}
+
+/// Comment out every line of `text`, not just the first.
+///
+/// Roblox's question text is markdown and runs to a dozen lines: a definition,
+/// a bulleted list of what not to count, sometimes a link. Prefixing only the
+/// first line produced a file that `pull` wrote happily and nothing could read
+/// back, because line two was parsed as TOML.
+fn comment(text: &str) -> String {
+    let mut out = String::new();
+
+    for line in text.trim().lines() {
+        let line = line.trim_end();
+        if line.is_empty() {
+            out.push_str("#\n");
+        } else {
+            out.push_str("# ");
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+
+    out
 }

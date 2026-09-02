@@ -12,7 +12,7 @@
 //! the first time somebody declares a "yes".
 
 use crate::config::Config;
-use crate::model::{Answer, Question, Questionnaire};
+use crate::model::{Answer, Match, Question, Questionnaire};
 
 #[derive(Debug, Default)]
 pub struct Plan {
@@ -67,6 +67,16 @@ pub enum Problem {
         answer: String,
         options: Vec<String>,
     },
+    /// The config answers it with a prefix that fits more than one option.
+    ///
+    /// Refused rather than resolved to the first match: picking between two
+    /// options on the user's behalf is picking what their game declares.
+    AmbiguousAnswer {
+        id: String,
+        topic: String,
+        answer: String,
+        matches: Vec<String>,
+    },
     /// The config answers a question this questionnaire no longer contains.
     ///
     /// Not fatal to a submission on its own, but reported: it usually means
@@ -115,10 +125,18 @@ fn walk(root: &Questionnaire, question: &Question, config: &Config, plan: &mut P
         .unwrap_or_default()
         .to_string();
 
-    let Some(declared) = config.get(&question.id) else {
-        // Stop here rather than guessing. Which follow-ups this question
-        // reveals depends on the answer, so without one there is nothing
-        // further to say about the branch underneath it.
+    // Absent from the file and present-but-blank are the same thing: nobody has
+    // answered. `pull` writes the blank, so this is the ordinary state of a
+    // freshly pulled file rather than an error case.
+    //
+    // Either way the walk stops here rather than guessing. Which follow-ups this
+    // question reveals depends on the answer, so without one there is nothing
+    // further to say about the branch underneath it.
+    let declared = config
+        .get(&question.id)
+        .filter(|d| !d.answer.trim().is_empty());
+
+    let Some(declared) = declared else {
         plan.problems.push(Problem::Unanswered {
             id: question.id.clone(),
             topic,
@@ -128,20 +146,26 @@ fn walk(root: &Questionnaire, question: &Question, config: &Config, plan: &mut P
         return;
     };
 
-    // By text first, because that is what a person writes. By id as the escape
-    // hatch for a question whose options are not words.
-    let chosen = question
-        .option_by_text(&declared.answer)
-        .or_else(|| question.option_by_id(&declared.answer));
-
-    let Some(option) = chosen else {
-        plan.problems.push(Problem::UnknownAnswer {
-            id: question.id.clone(),
-            topic,
-            answer: declared.answer.clone(),
-            options: question.option_texts(),
-        });
-        return;
+    let option = match question.match_answer(&declared.answer) {
+        Match::One(option) => option,
+        Match::None => {
+            plan.problems.push(Problem::UnknownAnswer {
+                id: question.id.clone(),
+                topic,
+                answer: declared.answer.clone(),
+                options: question.option_texts(),
+            });
+            return;
+        }
+        Match::Ambiguous(matches) => {
+            plan.problems.push(Problem::AmbiguousAnswer {
+                id: question.id.clone(),
+                topic,
+                answer: declared.answer.clone(),
+                matches,
+            });
+            return;
+        }
     };
 
     plan.answers.push(Answer::new(&question.id, &option.id));

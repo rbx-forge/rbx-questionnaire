@@ -190,16 +190,59 @@ fn collect<'a>(question: &'a Question, out: &mut Vec<&'a Question>) {
     }
 }
 
-impl Question {
-    /// The option whose text matches, ignoring case and surrounding space.
-    pub fn option_by_text(&self, text: &str) -> Option<&Opt> {
-        self.options
-            .iter()
-            .find(|o| o.text.trim().eq_ignore_ascii_case(text.trim()))
-    }
+/// What a written answer resolved to.
+#[derive(Debug)]
+pub enum Match<'a> {
+    One(&'a Opt),
+    None,
+    /// A prefix that fits more than one option. Guessing between them would be
+    /// guessing at a content declaration, so it is refused and both are named.
+    Ambiguous(Vec<String>),
+}
 
-    pub fn option_by_id(&self, id: &str) -> Option<&Opt> {
-        self.options.iter().find(|o| o.id == id)
+impl Question {
+    /// Resolve a written answer to one of this question's options.
+    ///
+    /// Exact text first, then the option id, then an unambiguous prefix. The
+    /// prefix rule exists because Roblox's options are not the words you would
+    /// expect: the violence question offers "No" and "Yes (Contains Violence)",
+    /// and nobody should have to retype that. A prefix matching two options is
+    /// an error rather than a coin toss.
+    pub fn match_answer(&self, answer: &str) -> Match<'_> {
+        let wanted = answer.trim();
+
+        if let Some(exact) = self
+            .options
+            .iter()
+            .find(|o| o.text.trim().eq_ignore_ascii_case(wanted))
+        {
+            return Match::One(exact);
+        }
+
+        if let Some(by_id) = self.options.iter().find(|o| o.id == wanted) {
+            return Match::One(by_id);
+        }
+
+        if wanted.is_empty() {
+            return Match::None;
+        }
+
+        let prefixed: Vec<&Opt> = self
+            .options
+            .iter()
+            .filter(|o| {
+                o.text
+                    .trim()
+                    .to_lowercase()
+                    .starts_with(&wanted.to_lowercase())
+            })
+            .collect();
+
+        match prefixed.as_slice() {
+            [only] => Match::One(only),
+            [] => Match::None,
+            many => Match::Ambiguous(many.iter().map(|o| o.text.clone()).collect()),
+        }
     }
 
     pub fn option_texts(&self) -> Vec<String> {

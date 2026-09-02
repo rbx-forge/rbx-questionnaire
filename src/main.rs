@@ -188,14 +188,7 @@ async fn run_show(args: Common) -> Result<ExitCode> {
     );
     println!();
 
-    for reached in &plan.reached {
-        let topic = if reached.topic.is_empty() {
-            "?"
-        } else {
-            &reached.topic
-        };
-        println!("  {topic:<28} {}", reached.answer);
-    }
+    print_answers(&plan);
 
     if !plan.problems.is_empty() {
         println!();
@@ -259,14 +252,8 @@ async fn run_submit(args: Submit) -> Result<ExitCode> {
         .await?;
 
     println!("About to declare, for universe {}:", live.universe_id);
-    for reached in &plan.reached {
-        let topic = if reached.topic.is_empty() {
-            "?"
-        } else {
-            &reached.topic
-        };
-        println!("  {topic:<28} {}", reached.answer);
-    }
+    print_answers(&plan);
+
     println!();
     match preview.age_rating() {
         Some(rating) => println!("Resulting age rating: {rating}"),
@@ -309,6 +296,42 @@ async fn run_submit(args: Submit) -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
+/// The declared answers, one per line, with the topic column sized to fit.
+///
+/// Sized rather than fixed: "Continuous Media Feed and Autoplay" is a real
+/// topic name and a fixed column swallowed the space after it.
+fn print_answers(plan: &Plan) {
+    let width = plan
+        .reached
+        .iter()
+        .map(|r| r.topic.chars().count())
+        .max()
+        .unwrap_or(0);
+
+    for reached in &plan.reached {
+        let topic = if reached.topic.is_empty() {
+            "?"
+        } else {
+            &reached.topic
+        };
+        println!("  {topic:<width$}  {}", reached.answer);
+    }
+}
+
+/// The question itself, without the guidance under it.
+///
+/// Roblox's question text is markdown: the question, then a definition, a
+/// bulleted list of what not to count, sometimes a link. Printing all of it
+/// under an error buries the error.
+fn first_line(text: &str) -> &str {
+    text.trim()
+        .lines()
+        .next()
+        .unwrap_or("")
+        .trim_start_matches('#')
+        .trim()
+}
+
 fn print_problems(plan: &Plan) {
     for problem in &plan.problems {
         match problem {
@@ -319,7 +342,7 @@ fn print_problems(plan: &Plan) {
                 ..
             } => {
                 eprintln!("  unanswered: {topic}");
-                eprintln!("      {text}");
+                eprintln!("      {}", first_line(text));
                 if !options.is_empty() {
                     eprintln!("      options: {}", options.join(", "));
                 }
@@ -332,6 +355,16 @@ fn print_problems(plan: &Plan) {
             } => {
                 eprintln!("  '{answer}' is not an option for: {topic}");
                 eprintln!("      options: {}", options.join(", "));
+            }
+            Problem::AmbiguousAnswer {
+                topic,
+                answer,
+                matches,
+                ..
+            } => {
+                eprintln!("  '{answer}' fits more than one option for: {topic}");
+                eprintln!("      matches: {}", matches.join(", "));
+                eprintln!("      write enough of it to tell them apart");
             }
             Problem::Stale { id, topic } => {
                 eprintln!("  no longer asked: {topic} ({id})");

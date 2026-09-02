@@ -151,6 +151,96 @@ fn an_option_id_works_as_an_answer() {
     assert_eq!(p.answers[0].value, "\"v-yes\"");
 }
 
+/// Roblox's options are not the words you would expect. The real violence
+/// question offers "No" and "Yes (Contains Violence)", so an exact match would
+/// make somebody retype that to declare it.
+#[test]
+fn an_unambiguous_prefix_resolves_to_the_option_it_fits() {
+    let q = questionnaire(vec![section(
+        "Violence",
+        vec![Question {
+            id: "v".to_string(),
+            text: "Any violence?".to_string(),
+            question_type: "SingleSelect".to_string(),
+            options: vec![
+                Opt {
+                    id: "v-no".to_string(),
+                    text: "No".to_string(),
+                    child_questions: Vec::new(),
+                },
+                Opt {
+                    id: "v-yes".to_string(),
+                    text: "Yes (Contains Violence)".to_string(),
+                    child_questions: Vec::new(),
+                },
+            ],
+        }],
+    )]);
+
+    let p = plan(&q, &config(&[("v", "yes")]));
+
+    assert!(p.problems.is_empty(), "{:?}", p.problems);
+    assert_eq!(p.answers[0].value, "\"v-yes\"");
+    assert_eq!(p.reached[0].answer, "Yes (Contains Violence)");
+}
+
+/// But a prefix that fits two options is refused rather than resolved to the
+/// first: choosing between them would be choosing what the game declares.
+#[test]
+fn a_prefix_that_fits_two_options_is_refused() {
+    let q = questionnaire(vec![section(
+        "Violence",
+        vec![Question {
+            id: "v".to_string(),
+            text: "How much?".to_string(),
+            question_type: "SingleSelect".to_string(),
+            options: vec![
+                Opt {
+                    id: "mild".to_string(),
+                    text: "Mild".to_string(),
+                    child_questions: Vec::new(),
+                },
+                Opt {
+                    id: "moderate".to_string(),
+                    text: "Moderate".to_string(),
+                    child_questions: Vec::new(),
+                },
+            ],
+        }],
+    )]);
+
+    let p = plan(&q, &config(&[("v", "M")]));
+
+    assert!(!p.is_submittable());
+    match &p.problems[0] {
+        Problem::AmbiguousAnswer { matches, .. } => assert_eq!(matches.len(), 2),
+        other => panic!("expected AmbiguousAnswer, got {other:?}"),
+    }
+
+    // Enough of it to tell them apart resolves.
+    let p = plan(&q, &config(&[("v", "Mod")]));
+    assert!(p.problems.is_empty(), "{:?}", p.problems);
+    assert_eq!(p.answers[0].value, "\"moderate\"");
+}
+
+/// `pull` writes `answer = ""`, so a freshly pulled file is full of them. That
+/// is unanswered, not wrongly answered, and the message has to say so.
+#[test]
+fn a_blank_answer_reads_as_unanswered_rather_than_wrong() {
+    let q = questionnaire(vec![section(
+        "Violence",
+        vec![yes_no("v", "Any violence?")],
+    )]);
+
+    for blank in ["", "   "] {
+        let p = plan(&q, &config(&[("v", blank)]));
+        match &p.problems[0] {
+            Problem::Unanswered { id, .. } => assert_eq!(id, "v"),
+            other => panic!("{blank:?} should read as unanswered, got {other:?}"),
+        }
+    }
+}
+
 // ─── Follow-up questions ─────────────────────────────────────
 
 /// The case a tool that only ever answers "no" never meets: saying yes reveals

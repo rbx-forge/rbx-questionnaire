@@ -45,7 +45,15 @@ answer = "no"
 
 `id` is Roblox's own question id, which is what stays stable when a question is
 reworded. `topic` is a label for people and is never matched on. `answer` is
-matched against the option text, case-insensitively.
+matched against the option text.
+
+The options are not always the words you would expect. The real violence
+question offers `No` and `Yes (Contains Violence)`, and its follow-ups offer
+`Mild / Moderate` and `Occasional / Repeated`. So an answer matches exactly
+first, then by the option id, then by an unambiguous prefix: `yes` finds
+`Yes (Contains Violence)`, while `M` fits both `Mild` and `Moderate` and is
+refused rather than resolved to the first. Choosing between two options on your
+behalf is choosing what your game declares.
 
 ## The commands
 
@@ -83,6 +91,19 @@ nothing, so the follow-ups never have to be answered. The first honest `yes`
 finds them. A follow-up behind an option you did not choose is not required, is
 not submitted, and keeping an answer for it is fine, which is what lets you flip
 a `yes` back and forth without losing what you wrote underneath.
+
+The scale of it, measured against a real universe: the questionnaire holds **26
+questions**, of which **14** are reachable if you answer no throughout. The other
+twelve are follow-ups. Declaring one `yes` on violence pulls in two more, and
+they are not yes/no questions:
+
+```
+$ rbx-questionnaire check --env prod
+  'no' is not an option for: Violence
+      options: Mild, Moderate
+  'no' is not an option for: Violence
+      options: Occasional, Repeated
+```
 
 ## When Roblox changes the questionnaire
 

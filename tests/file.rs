@@ -139,6 +139,50 @@ fn follow_up_questions_are_written_too() {
     assert_eq!(config.get("v-realistic").unwrap().topic, "Violence");
 }
 
+/// Found by running this against a real universe, where `pull` wrote a file
+/// that nothing could read back.
+///
+/// Roblox's question text is markdown and runs to a dozen lines: a definition,
+/// a bulleted list of what not to count, sometimes a link. Prefixing only the
+/// first line left line two to be parsed as TOML.
+#[test]
+fn a_multi_line_question_is_commented_on_every_line() {
+    let mut question = yes_no("v", "Any violence?");
+    question.text = "#### Does this experience contain violence?\n\
+                     **Violence**: Depictions of the act and/or the consequence.\n\
+                     **Do NOT measure**:\n\
+                     * Character death due to accidents.\n\
+                     * Nonviolent adversarial games."
+        .to_string();
+
+    let q = Questionnaire {
+        id: "q1".to_string(),
+        sections: vec![Section {
+            id: "s".to_string(),
+            name: "Violence".to_string(),
+            questions: vec![question],
+        }],
+    };
+
+    let (text, _) = merge(None, &q).unwrap();
+
+    // The whole point: it must survive a round trip.
+    let config: Config = toml::from_str(&text).expect("the output must parse back");
+    assert_eq!(config.questions.len(), 1);
+
+    for line in text.lines() {
+        let line = line.trim();
+        assert!(
+            !line.starts_with("**") && !line.starts_with('*'),
+            "a markdown line escaped the comment: {line}"
+        );
+    }
+    assert!(
+        text.contains("# * Character death due to accidents."),
+        "{text}"
+    );
+}
+
 #[test]
 fn a_file_that_is_not_an_array_of_tables_is_an_error_not_a_silent_overwrite() {
     let broken = "question = 3\n";
