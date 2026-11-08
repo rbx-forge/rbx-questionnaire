@@ -1,6 +1,6 @@
 # rbx-questionnaire
 
-[![CI](https://github.com/rbx-dev-tools/rbx-questionnaire/actions/workflows/ci.yml/badge.svg)](https://github.com/rbx-dev-tools/rbx-questionnaire/actions/workflows/ci.yml)
+[![CI](https://github.com/rbx-forge/rbx-questionnaire/actions/workflows/ci.yml/badge.svg)](https://github.com/rbx-forge/rbx-questionnaire/actions/workflows/ci.yml)
 [![License: MPL 2.0](https://img.shields.io/badge/license-MPL--2.0-blue.svg)](./LICENSE)
 
 Declare, review and submit a Roblox experience's content questionnaire.
@@ -169,28 +169,17 @@ expired cookie, and the error says so.
 
 ## Install
 
-With [Rokit](https://github.com/rojo-rbx/rokit):
+With [mise](https://mise.jdx.dev) or [Rokit](https://github.com/rojo-rbx/rokit), either of which pins the latest release in your project's config:
 
-```toml
-[tools]
-rbx-questionnaire = "rbx-dev-tools/rbx-questionnaire@0.1.0"
+```bash
+mise use --pin github:rbx-forge/rbx-questionnaire
+rokit add rbx-forge/rbx-questionnaire   # or, with Rokit
 ```
 
-then `rokit install`. Or take a binary from the
-[releases page](https://github.com/rbx-dev-tools/rbx-questionnaire/releases),
+Or take a binary from the
+[releases page](https://github.com/rbx-forge/rbx-questionnaire/releases),
 which ships one zip per platform with a `SHA256SUMS` beside them, or build from
-source with `cargo install --git`.
-
-## Where this sits
-
-| tool | does |
-| --- | --- |
-| **rbx-questionnaire** | **the content questionnaire and the age rating it produces** |
-| [rbx-cli](https://github.com/rbx-forge/rbx-cli) | Open Cloud: metadata, shop, configs, place upload, live ops |
-| [rbx-inject](https://github.com/rbx-dev-tools/rbx-inject) | writing asset ids into a `.rbxl` before upload |
-| [rbx-observe](https://github.com/rbx-forge/rbx-observe) | public storefront data, other people's games |
-| [rbx-switch](https://github.com/rbx-dev-tools/rbx-switch) | which Studio account the next command uses |
-
+source with `cargo install --git https://github.com/rbx-forge/rbx-questionnaire --locked`.
 ## License
 
 [MPL-2.0](./LICENSE).
