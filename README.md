@@ -72,7 +72,7 @@ A new question shows as unanswered and blocks a submission. A removed question i
 
 `--universe-id` names the universe, or `--env prod` reads it from the project's `rbxplace.toml` (read only).
 
-The cookie comes from `--cookie`, then `RBX_COOKIE`, then a signed-in local Roblox Studio. It needs edit access to the universe: a `403` is almost always that, or an expired cookie.
+The cookie comes from `--cookie` or `RBX_COOKIE`, else from a signed-in local Roblox Studio **if you say yes**: asked once on a terminal, refused where nobody can answer. `--auto-cookie` answers yes in advance, `--no-auto-cookie` refuses; in CI, set `RBX_COOKIE`. The account needs edit access to the universe: a `403` is almost always that, or an expired cookie.
 
 ## Install
 

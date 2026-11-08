@@ -57,8 +57,8 @@ struct Common {
     #[arg(long, short = 'c', value_name = "PATH", default_value = DEFAULT_FILE)]
     config: PathBuf,
 
-    /// A .ROBLOSECURITY cookie. Falls back to $RBX_COOKIE, then to a local
-    /// Studio install.
+    /// A .ROBLOSECURITY cookie. Falls back to $RBX_COOKIE, then to a signed-in
+    /// local Studio, which is asked for first (see --auto-cookie).
     #[arg(
         long,
         value_name = "COOKIE",
@@ -66,6 +66,14 @@ struct Common {
         hide_env_values = true
     )]
     cookie: Option<String>,
+
+    /// Never use the session of a signed-in local Studio.
+    #[arg(long)]
+    no_auto_cookie: bool,
+
+    /// Use a signed-in local Studio session without asking first.
+    #[arg(long, conflicts_with = "no_auto_cookie")]
+    auto_cookie: bool,
 }
 
 #[derive(Args)]
@@ -133,7 +141,11 @@ async fn fetch(common: &Common) -> Result<Live> {
         (None, None) => bail!("pass --universe-id, or --env with an rbxplace.toml"),
     };
 
-    let api = Api::new(resolve_cookie(common.cookie.clone())?)?;
+    let api = Api::new(resolve_cookie(
+        common.cookie.as_deref(),
+        common.no_auto_cookie,
+        common.auto_cookie,
+    )?)?;
     let id = api.latest_id(universe_id).await?;
     let questionnaire = api.questionnaire(&id).await?;
 

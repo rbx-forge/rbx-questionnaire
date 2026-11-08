@@ -204,24 +204,45 @@ fn truncate(text: &str) -> String {
     format!("{}...", &text[..end])
 }
 
-/// Where the cookie comes from, in the order a person expects.
+/// Where the cookie comes from: `--cookie` (or `RBX_COOKIE`), then a signed-in
+/// local Studio, but only after a yes.
 ///
-/// The flag beats the environment beats the local Studio install, so that a
-/// deliberate choice always wins over an ambient one. The Studio fallback is
-/// what makes the tool usable without ever putting a cookie in a shell history.
-pub fn resolve_cookie(flag: Option<String>) -> Result<String> {
-    if let Some(cookie) = flag.filter(|c| !c.is_empty()) {
-        return Ok(cookie);
+/// A session cookie is a whole account, so finding one on the machine is not
+/// the same as being allowed to send it. rbx-core holds the chain every
+/// rbx-forge tool uses: asked once on a terminal, refused where nobody can
+/// answer, `auto` the standing yes and `no_auto` the standing no. An empty
+/// explicit value means "no cookie" and stops there.
+pub fn resolve_cookie(explicit: Option<&str>, no_auto: bool, auto: bool) -> Result<String> {
+    match rbx_core::env::resolve_cookie(explicit, no_auto, auto) {
+        Some(cookie) if !cookie.is_empty() => Ok(cookie),
+        _ => bail!(
+            "no cookie: pass --cookie or set RBX_COOKIE, or sign in to Roblox Studio and \
+             answer yes when asked (--auto-cookie answers in advance)"
+        ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_cookie;
+
+    /// A cookie passed on purpose is used as given, whatever the Studio flags.
+    #[test]
+    fn an_explicit_cookie_wins() {
+        assert_eq!(resolve_cookie(Some("abc"), true, false).unwrap(), "abc");
     }
 
-    if let Ok(cookie) = std::env::var("RBX_COOKIE") {
-        if !cookie.is_empty() {
-            return Ok(cookie);
-        }
+    /// `RBX_COOKIE=` means "no cookie": it stops the chain rather than falling
+    /// through to Studio, and is refused here rather than sent empty.
+    #[test]
+    fn an_empty_explicit_cookie_is_no_cookie() {
+        assert!(resolve_cookie(Some(""), false, true).is_err());
     }
 
-    rbx_cookie::get_value().context(
-        "no cookie: pass --cookie, set RBX_COOKIE, or sign in to Roblox Studio \
-         on this machine so it can be read from there",
-    )
+    /// `--no-auto-cookie` with nothing explicit never reaches Studio.
+    #[test]
+    fn no_auto_cookie_and_nothing_explicit_is_an_error() {
+        let err = resolve_cookie(None, true, false).unwrap_err().to_string();
+        assert!(err.contains("--auto-cookie"), "{err}");
+    }
 }

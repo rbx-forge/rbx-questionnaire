@@ -1,6 +1,6 @@
 [package]
 name = "rbx-questionnaire"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 # Set by a dependency, not by our code, and bisected against real toolchains
 # rather than read off the manifests: 1.87 fails, 1.88 passes. It comes from the
@@ -45,10 +45,10 @@ reqwest = { version = "0.12", default-features = false, features = [
     "http2",
     "rustls-tls-native-roots",
 ] }
-# The library, not its command line: one call site, reading the cookie a local
-# Studio install already holds. The default `cli` feature drags in a second
-# copy of clap.
-rbx_cookie = { version = "0.1", default-features = false }
+# The library the rbx-forge tools share, for one thing here: the cookie chain,
+# so a signed-in Studio is used only after the same yes every other tool asks
+# for, with the same notice.
+rbx-core = { git = "https://github.com/rbx-forge/rbx-core", tag = "v0.1.1" }
 dialoguer = "0.11"
 
 [dev-dependencies]
