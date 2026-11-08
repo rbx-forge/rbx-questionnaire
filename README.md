@@ -76,12 +76,19 @@ The cookie comes from `--cookie`, then `RBX_COOKIE`, then a signed-in local Robl
 
 ## Install
 
-With [mise](https://mise.jdx.dev) or [Rokit](https://github.com/rojo-rbx/rokit), either of which pins the latest release in your project's config:
+With [mise](https://mise.jdx.dev):
 
 ```bash
 mise use --pin github:rbx-forge/rbx-questionnaire
-rokit add rbx-forge/rbx-questionnaire   # or, with Rokit
 ```
+
+Or with [Rokit](https://github.com/rojo-rbx/rokit):
+
+```bash
+rokit add rbx-forge/rbx-questionnaire
+```
+
+Either one pins the latest release in your project's config.
 
 Or take a binary from the [releases page](https://github.com/rbx-forge/rbx-questionnaire/releases), with a `SHA256SUMS` beside them, or build from source with `cargo install --git https://github.com/rbx-forge/rbx-questionnaire --locked`.
 
