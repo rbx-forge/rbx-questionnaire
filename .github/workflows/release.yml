@@ -15,10 +15,9 @@ permissions:
   contents: read
 
 jobs:
-  # Three targets, not the four rbx-cli ships. The missing one is
-  # x86_64-unknown-linux-musl, and it is missing on purpose rather than by
-  # oversight: rbx-cli builds musl through cargo-zigbuild, and this crate
-  # compiles Luau from vendored C++, so a musl build has to link libstdc++
+  # Three targets. x86_64-unknown-linux-musl is missing on purpose rather than
+  # by oversight: this crate compiles Luau from vendored C++, so a musl build
+  # through cargo-zigbuild has to link libstdc++
   # statically through zig cc as well. That may well work; it has not been
   # verified, and shipping an artifact that fails to start is worse than not
   # shipping it. Add it once a build has been proven to run on a musl image.
