@@ -1,11 +1,11 @@
 //! Resolving `--env prod` through `rbxplace.toml`.
 //!
-//! That file belongs to rbx-cli, and this tool only reads it. Sharing it is the
+//! That file belongs to rbx-deploy, and this tool only reads it. Sharing it is the
 //! point: an environment name should mean the same universe to every tool in a
 //! project, and asking somebody to repeat a universe id into a second file is
 //! how the two drift apart.
 //!
-//! Parsed loosely rather than against a struct: rbx-cli owns the schema and
+//! Parsed loosely rather than against a struct: rbx-deploy owns the schema and
 //! adds to it, and a key this tool has never heard of should not stop it
 //! finding a universe id.
 
