@@ -6,6 +6,10 @@
 
 - Release archives carry a build provenance attestation: `gh attestation verify <zip> --repo rbx-forge/rbx-questionnaire`. The build jobs run with read access only, and the publishing job alone may write.
 
+### Fixed
+
+- `submit` stops when Roblox marks the answers as not submittable. It printed that line and went on to the question, or straight to filing under `--yes`. `--dry-run` fails on it too, so a dry run that passes is one the real run would file.
+
 ## [0.2.0] - 2026-11-08
 
 ### Added
