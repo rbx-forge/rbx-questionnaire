@@ -37,7 +37,7 @@ answer = "no"
 | `pull` | Write or update the file from the live questionnaire. Only appends: never rewrites an answer or removes an entry, and keeps your comments |
 | `show` | The questions, and your answer to each |
 | `check` | Non-zero unless every question asked is answered. For CI |
-| `submit` | Validate with Roblox, show the resulting age rating, ask, then file. `--dry-run` stops before filing, `--yes` skips the question |
+| `submit` | Validate with Roblox, show the resulting age rating, ask, then file. `--dry-run` stops before filing, `--yes` skips the question. Answers Roblox marks as not submittable are never filed, and fail a dry run too |
 
 To start from "no" rather than fill fourteen answers by hand:
 

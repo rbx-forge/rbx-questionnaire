@@ -5,7 +5,7 @@ use std::process::ExitCode;
 
 use rbx_questionnaire::api::{resolve_cookie, Api};
 use rbx_questionnaire::config::{Config, DEFAULT_FILE};
-use rbx_questionnaire::model::Questionnaire;
+use rbx_questionnaire::model::{PreviewResponse, Questionnaire};
 use rbx_questionnaire::plan::{plan, Plan, Problem};
 use rbx_questionnaire::{env, file};
 
@@ -302,27 +302,26 @@ async fn run_submit(args: Submit) -> Result<ExitCode> {
         Some(rating) => println!("Resulting age rating: {rating}"),
         None => println!("Roblox did not return a rating for these answers."),
     }
-    if preview.disable_submit_button {
-        println!("Roblox marks this response as not submittable.");
-    }
 
-    if args.dry_run {
-        println!("\nDry run, nothing filed.");
-        return Ok(ExitCode::SUCCESS);
-    }
-
-    if !args.yes {
-        println!();
-        let confirmed = dialoguer::Confirm::new()
-            .with_prompt("File this declaration with Roblox?")
-            .default(false)
-            .interact()
-            .context("reading the confirmation")?;
-
-        if !confirmed {
-            println!("Nothing filed.");
+    match after_preview(&preview, args.dry_run, args.yes)? {
+        Step::DryRun => {
+            println!("\nDry run, nothing filed.");
             return Ok(ExitCode::SUCCESS);
         }
+        Step::Ask => {
+            println!();
+            let confirmed = dialoguer::Confirm::new()
+                .with_prompt("File this declaration with Roblox?")
+                .default(false)
+                .interact()
+                .context("reading the confirmation")?;
+
+            if !confirmed {
+                println!("Nothing filed.");
+                return Ok(ExitCode::SUCCESS);
+            }
+        }
+        Step::File => {}
     }
 
     let response = live
@@ -337,6 +336,40 @@ async fn run_submit(args: Submit) -> Result<ExitCode> {
     }
 
     Ok(ExitCode::SUCCESS)
+}
+
+/// What `submit` does once Roblox has previewed the answers.
+#[derive(Debug, PartialEq, Eq)]
+enum Step {
+    /// `--dry-run`: stop here, nothing filed.
+    DryRun,
+    /// Ask before filing.
+    Ask,
+    /// `--yes`: file without asking.
+    File,
+}
+
+/// What follows the preview: stop, ask, or file.
+///
+/// Roblox's preview can mark a response `disableSubmitButton`. What sets the
+/// flag is not documented; its name says the Creator Hub would not offer to
+/// submit these answers, so this tool does not either. It stops whatever the
+/// flags: `--yes` answers this tool's question and not Roblox's objection, and
+/// a dry run that passed would promise a filing the real run refuses.
+fn after_preview(preview: &PreviewResponse, dry_run: bool, yes: bool) -> Result<Step> {
+    if preview.disable_submit_button {
+        bail!(
+            "Roblox marks these answers as not submittable (`disableSubmitButton` in \
+             its preview), so nothing was filed. The questionnaire page of the Creator \
+             Hub is the place to see why."
+        );
+    }
+
+    Ok(match (dry_run, yes) {
+        (true, _) => Step::DryRun,
+        (false, true) => Step::File,
+        (false, false) => Step::Ask,
+    })
 }
 
 /// The declared answers, one per line, with the topic column sized to fit.
@@ -415,6 +448,53 @@ fn print_problems(plan: &Plan) {
                     "      harmless, but the questionnaire has changed since this was written"
                 );
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{after_preview, Step};
+    use rbx_questionnaire::model::PreviewResponse;
+
+    /// Parsed from the wire name rather than built from the field, so a rename
+    /// that disconnects Roblox's flag from the refusal fails here.
+    fn preview(body: &str) -> PreviewResponse {
+        serde_json::from_str(body).expect("a preview body")
+    }
+
+    /// The failure this guards: the flag was printed and the declaration filed
+    /// all the same, without a question under `--yes`.
+    #[test]
+    fn answers_roblox_marks_not_submittable_are_never_filed() {
+        let marked = preview(r#"{"disableSubmitButton": true}"#);
+
+        for (dry_run, yes) in [(false, true), (false, false), (true, false), (true, true)] {
+            let err = after_preview(&marked, dry_run, yes)
+                .expect_err("a marked response stops whatever the flags");
+
+            assert!(
+                err.to_string().contains("nothing was filed"),
+                "dry_run={dry_run} yes={yes}: {err}"
+            );
+        }
+    }
+
+    /// False or absent, Roblox's flag changes nothing and the command's own
+    /// flags decide.
+    #[test]
+    fn unmarked_answers_follow_the_flags() {
+        for body in [r#"{"disableSubmitButton": false}"#, "{}"] {
+            let unmarked = preview(body);
+
+            assert_eq!(after_preview(&unmarked, false, false).unwrap(), Step::Ask);
+            assert_eq!(after_preview(&unmarked, false, true).unwrap(), Step::File);
+            assert_eq!(after_preview(&unmarked, true, false).unwrap(), Step::DryRun);
+            assert_eq!(
+                after_preview(&unmarked, true, true).unwrap(),
+                Step::DryRun,
+                "a dry run files nothing, --yes or not"
+            );
         }
     }
 }
