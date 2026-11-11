@@ -110,11 +110,26 @@ pub struct PreviewResponse {
 impl PreviewResponse {
     /// The age rating these answers would produce, if the response says.
     ///
-    /// Dug out rather than typed, because the shape of this object is not
-    /// documented anywhere and a wrong struct would turn "we could not read the
-    /// rating" into "the request failed".
+    /// Read from `ageRecommendationSummary.ageRecommendation.displayName`. This
+    /// endpoint is not in Roblox's published Open Cloud specification, but a
+    /// rating preview of the same shape is, and that is where it puts the
+    /// rating. Not typed, because a wrong struct would turn "we could not read
+    /// the rating" into "the request failed".
+    ///
+    /// Failing that, a search for the first likely field, which never enters
+    /// `experienceDescriptorUsages`: those are the descriptors that led to the
+    /// rating ("Violence", "Blood"), each with a `displayName` of its own, and
+    /// printing one as the rating would misstate it.
     pub fn age_rating(&self) -> Option<String> {
         let details = self.age_recommendation_details.as_ref()?;
+
+        if let Some(rating) = details
+            .pointer(RATING_AT)
+            .and_then(serde_json::Value::as_str)
+            .filter(|rating| !rating.trim().is_empty())
+        {
+            return Some(rating.to_string());
+        }
 
         for key in ["displayName", "ageRecommendation", "name", "displayText"] {
             if let Some(found) = find_string(details, key) {
@@ -125,14 +140,23 @@ impl PreviewResponse {
     }
 }
 
-/// Depth-first search for the first string value under `key`.
+/// Where the rating sits in `ageRecommendationDetails`.
+const RATING_AT: &str = "/ageRecommendationSummary/ageRecommendation/displayName";
+
+/// Where the descriptors sit, which the search never enters.
+const DESCRIPTORS: &str = "experienceDescriptorUsages";
+
+/// Depth-first search for the first string value under `key`, outside the
+/// descriptors.
 fn find_string(value: &serde_json::Value, key: &str) -> Option<String> {
     match value {
         serde_json::Value::Object(map) => {
             if let Some(serde_json::Value::String(s)) = map.get(key) {
                 return Some(s.clone());
             }
-            map.values().find_map(|v| find_string(v, key))
+            map.iter()
+                .filter(|(k, _)| k.as_str() != DESCRIPTORS)
+                .find_map(|(_, v)| find_string(v, key))
         }
         serde_json::Value::Array(items) => items.iter().find_map(|v| find_string(v, key)),
         _ => None,
@@ -247,5 +271,67 @@ impl Question {
 
     pub fn option_texts(&self) -> Vec<String> {
         self.options.iter().map(|o| o.text.clone()).collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PreviewResponse;
+
+    fn rating(body: &str) -> Option<String> {
+        serde_json::from_str::<PreviewResponse>(body)
+            .expect("a preview body")
+            .age_rating()
+    }
+
+    /// Shaped like Roblox's specification, descriptors first.
+    #[test]
+    fn the_rating_is_read_from_the_summary_not_from_a_descriptor() {
+        let body = r#"{
+            "ageRecommendationDetails": {
+                "experienceDescriptorUsages": [{
+                    "name": "violence-usage",
+                    "experienceDescriptor": { "name": "violence", "displayName": "Violence" },
+                    "descriptorDisplayName": "Violence"
+                }],
+                "ageRecommendationSummary": {
+                    "ageRecommendation": {
+                        "displayName": "Ages 9+",
+                        "minimumAge": 9,
+                        "displayNameWithHeaderShort": "Maturity: Mild"
+                    }
+                }
+            }
+        }"#;
+
+        assert_eq!(rating(body).as_deref(), Some("Ages 9+"));
+    }
+
+    /// The failure this guards: with no `displayName` in the summary, the
+    /// search went on into the descriptors and printed "Violence" as the
+    /// rating.
+    #[test]
+    fn a_descriptor_is_never_taken_for_the_rating() {
+        let body = r#"{
+            "ageRecommendationDetails": {
+                "ageRecommendationSummary": { "ageRecommendation": { "minimumAge": 9 } },
+                "experienceDescriptorUsages": [{
+                    "name": "violence-usage",
+                    "experienceDescriptor": { "name": "violence", "displayName": "Violence" }
+                }]
+            }
+        }"#;
+
+        assert_eq!(rating(body), None);
+    }
+
+    /// A shape this tool does not know still yields a rating where one is.
+    #[test]
+    fn an_unfamiliar_shape_falls_back_to_the_search() {
+        let body = r#"{
+            "ageRecommendationDetails": { "rating": { "displayName": "Ages 13+" } }
+        }"#;
+
+        assert_eq!(rating(body).as_deref(), Some("Ages 13+"));
     }
 }
