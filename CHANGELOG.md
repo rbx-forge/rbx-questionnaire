@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **Built on rbx-core 0.2.0, with no change in behavior.** This tool takes one thing from it, the cookie chain, and that is unchanged: `--cookie` or `RBX_COOKIE` first, an empty value is no cookie, and a signed-in Studio is used only after a yes, `--auto-cookie` or `--no-auto-cookie` answering in advance. The requests to Roblox, the CSRF token included, go through this tool's own client as before.
+
 ## [0.2.2] - 2026-11-11
 
 ### Security

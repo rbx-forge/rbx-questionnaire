@@ -51,7 +51,7 @@ reqwest = { version = "0.12", default-features = false, features = [
 # The library the rbx-forge tools share, for one thing here: the cookie chain,
 # so a signed-in Studio is used only after the same yes every other tool asks
 # for, with the same notice.
-rbx-core = { git = "https://github.com/rbx-forge/rbx-core", tag = "v0.1.1" }
+rbx-core = { git = "https://github.com/rbx-forge/rbx-core", tag = "v0.2.0" }
 dialoguer = "0.11"
 
 [dev-dependencies]

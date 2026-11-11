@@ -458,7 +458,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1170,7 +1170,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1216,8 +1216,8 @@ dependencies = [
 
 [[package]]
 name = "rbx-core"
-version = "0.1.1"
-source = "git+https://github.com/rbx-forge/rbx-core?tag=v0.1.1#1ccd4e95cec438082cef618539c2ac2cc2e8cea2"
+version = "0.2.0"
+source = "git+https://github.com/rbx-forge/rbx-core?tag=v0.2.0#8eb24fe5a8b3b0070a648cc38beb3b2c0dd4b30a"
 dependencies = [
  "anyhow",
  "bit-vec",
@@ -1377,7 +1377,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1744,7 +1744,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
