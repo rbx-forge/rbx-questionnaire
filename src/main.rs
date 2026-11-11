@@ -243,6 +243,7 @@ async fn run_show(args: Common) -> Result<ExitCode> {
 
 async fn run_check(args: Common) -> Result<ExitCode> {
     let live = fetch(&args).await?;
+    let asked = questions_asked(&live.questionnaire)?;
     let config = load_config(&args.config)?;
     let plan = plan(&live.questionnaire, &config);
 
@@ -250,8 +251,7 @@ async fn run_check(args: Common) -> Result<ExitCode> {
 
     if plan.problems.is_empty() {
         println!(
-            "{} question(s) asked, {} answered.",
-            live.questionnaire.all_questions().len(),
+            "{asked} question(s) asked, {} answered.",
             plan.answers.len()
         );
         return Ok(ExitCode::SUCCESS);
@@ -264,6 +264,24 @@ async fn run_check(args: Common) -> Result<ExitCode> {
     } else {
         Ok(ExitCode::SUCCESS)
     }
+}
+
+/// How many questions Roblox asks, follow-ups included, or an error if none.
+///
+/// A questionnaire with no question in it is not one whose every question is
+/// answered. It is an empty answer from Roblox, or a shape this tool no longer
+/// reads, and passing `check` on it would turn a broken read into a green CI.
+fn questions_asked(questionnaire: &Questionnaire) -> Result<usize> {
+    let asked = questionnaire.all_questions().len();
+    if asked == 0 {
+        bail!(
+            "no question could be read from questionnaire {}, so nothing was checked. \
+             Roblox returned none, or returned them in a shape this tool does not read: \
+             these endpoints are undocumented and Roblox can change them without notice",
+            questionnaire.id
+        );
+    }
+    Ok(asked)
 }
 
 async fn run_submit(args: Submit) -> Result<ExitCode> {
@@ -454,8 +472,40 @@ fn print_problems(plan: &Plan) {
 
 #[cfg(test)]
 mod tests {
-    use super::{after_preview, Step};
-    use rbx_questionnaire::model::PreviewResponse;
+    use super::{after_preview, questions_asked, Step};
+    use rbx_questionnaire::model::{PreviewResponse, Questionnaire};
+
+    fn questionnaire(body: &str) -> Questionnaire {
+        serde_json::from_str(body).expect("a questionnaire body")
+    }
+
+    /// The failure this guards: `check` passed on a questionnaire it had read
+    /// nothing from, so an empty answer from Roblox read as a complete
+    /// declaration.
+    #[test]
+    fn a_questionnaire_with_no_question_fails_the_check() {
+        for body in [
+            r#"{"id": "q1"}"#,
+            r#"{"id": "q1", "sections": []}"#,
+            r#"{"id": "q1", "sections": [{"name": "Violence", "questions": []}]}"#,
+            // Questions under a key this tool does not read: parsed, kept nothing.
+            r#"{"id": "q1", "sections": [{"name": "Violence", "items": [{"id": "v"}]}]}"#,
+        ] {
+            let err = questions_asked(&questionnaire(body)).expect_err(body);
+            assert!(
+                err.to_string().contains("no question could be read"),
+                "{body}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_questionnaire_with_questions_counts_them() {
+        let one = questionnaire(
+            r#"{"id": "q1", "sections": [{"name": "Violence", "questions": [{"id": "v"}]}]}"#,
+        );
+        assert_eq!(questions_asked(&one).unwrap(), 1);
+    }
 
     /// Parsed from the wire name rather than built from the field, so a rename
     /// that disconnects Roblox's flag from the refusal fails here.

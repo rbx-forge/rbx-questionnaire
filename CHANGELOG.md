@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **`check` fails on a questionnaire with no question in it.** An empty answer from Roblox, or one in a shape this tool does not read, passed as "0 question(s) asked, 0 answered". It now exits non-zero and says no question could be read.
+
 ## [0.2.3] - 2026-11-11
 
 ### Security
