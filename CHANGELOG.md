@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Security
+
+- The API client's debug output no longer shows the session cookie or the CSRF token.
+
 ## [0.2.1] - 2026-11-10
 
 ### Security
