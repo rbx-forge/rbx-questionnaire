@@ -16,6 +16,9 @@ authors = ["rbx-forge"]
 keywords = ["roblox", "questionnaire", "age-rating", "cli"]
 categories = ["command-line-utilities", "game-development"]
 readme = "README.md"
+# crates.io refuses a crate with a git dependency, and this one has one. The
+# binary ships through GitHub releases.
+publish = false
 
 [lib]
 name = "rbx_questionnaire"
