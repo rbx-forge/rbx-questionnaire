@@ -10,6 +10,7 @@
 
 - **`check` fails on a questionnaire with no question in it.** An empty answer from Roblox, or one in a shape this tool does not read, passed as "0 question(s) asked, 0 answered". It now exits non-zero and says no question could be read.
 - **The age rating `submit` prints is the rating, never a descriptor.** It is read where Roblox puts it, under `ageRecommendationSummary`, and the search used for any other shape no longer looks among the descriptors, which have a display name of their own ("Violence").
+- **`pull --fill no` fills only the options that say "No".** The fill word matched by prefix, so it also answered "None of the above" or "Not applicable". It now matches an option's whole text, ignoring case. A typed answer keeps its prefix rule.
 
 ## [0.2.3] - 2026-11-11
 
