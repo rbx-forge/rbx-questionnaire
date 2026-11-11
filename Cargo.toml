@@ -1,6 +1,6 @@
 [package]
 name = "rbx-questionnaire"
-version = "0.2.3"
+version = "0.3.0"
 edition = "2021"
 # Set by a dependency, not by our code, and bisected against real toolchains
 # rather than read off the manifests: 1.87 fails, 1.88 passes. It comes from the
