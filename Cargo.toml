@@ -56,6 +56,7 @@ dialoguer = "0.11"
 
 [dev-dependencies]
 tempfile = "3"
+wiremock = "0.6"
 
 # Release profile tuned for a distributed CLI binary. Slower to compile, but
 # the binary is smaller and starts faster.
