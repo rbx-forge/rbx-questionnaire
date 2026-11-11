@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **`submit` names the experience and the account in its question.** It asked to file "for universe" and a number, and nothing said which account the cookie belonged to. The question now gives the experience's name and the signed-in account's name, and says so when either could not be read, then asks all the same.
+
 ### Fixed
 
 - **`check` fails on a questionnaire with no question in it.** An empty answer from Roblox, or one in a shape this tool does not read, passed as "0 question(s) asked, 0 answered". It now exits non-zero and says no question could be read.
