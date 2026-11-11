@@ -17,11 +17,17 @@ use crate::model::{
 };
 
 const BASE: &str = "https://apis.roblox.com/experience-questionnaire/v1";
+/// The experience's name, for the confirmation. Public: no cookie goes there.
+const GAMES_BASE: &str = "https://games.roblox.com";
+/// The signed-in account's name, for the confirmation.
+const USERS_BASE: &str = "https://users.roblox.com";
 const LOCALE: &str = "en_us";
 
 pub struct Api {
     http: Client,
     base: String,
+    games: String,
+    users: String,
     cookie: String,
     /// Roblox hands this out on the first rejected write and expects it back on
     /// every subsequent one.
@@ -60,9 +66,20 @@ impl Api {
         Ok(Self {
             http,
             base: base.trim_end_matches('/').to_string(),
+            games: GAMES_BASE.to_string(),
+            users: USERS_BASE.to_string(),
             cookie,
             csrf: std::sync::Mutex::new(None),
         })
+    }
+
+    /// Point the two name lookups somewhere else, as `with_base` does the
+    /// questionnaire.
+    #[cfg(test)]
+    fn with_lookup_bases(mut self, games: &str, users: &str) -> Self {
+        self.games = games.trim_end_matches('/').to_string();
+        self.users = users.trim_end_matches('/').to_string();
+        self
     }
 
     /// The id of the questionnaire this universe is currently being asked.
@@ -133,13 +150,78 @@ impl Api {
         self.request_json(Method::POST, &url, Some(body)).await
     }
 
+    /// The question `submit` asks before filing, naming the experience and the
+    /// account it is filed as.
+    ///
+    /// A cookie is a whole account, and a universe id is a number: either can
+    /// be the wrong one without anything else saying so, and this is the last
+    /// moment to notice. A lookup that fails is said in the question, which is
+    /// still asked: the names help the answer, they are not a condition of it.
+    pub async fn filing_question(&self, universe_id: u64) -> String {
+        let (experience, account) =
+            tokio::join!(self.experience_name(universe_id), self.account_name());
+        filing_question(universe_id, experience.ok(), account.ok())
+    }
+
+    /// The experience's name, from the public games endpoint, without the
+    /// cookie: it answers anyone.
+    async fn experience_name(&self, universe_id: u64) -> Result<String> {
+        #[derive(serde::Deserialize)]
+        struct Games {
+            #[serde(default)]
+            data: Vec<Game>,
+        }
+        #[derive(serde::Deserialize)]
+        struct Game {
+            #[serde(default)]
+            name: String,
+        }
+
+        let url = format!("{}/v1/games?universeIds={universe_id}", self.games);
+        let games: Games = self
+            .request_json_as(Method::GET, &url, None, Credentials::None)
+            .await?;
+        match games.data.into_iter().next() {
+            Some(game) if !game.name.trim().is_empty() => Ok(game.name),
+            _ => bail!("Roblox returned no name for universe {universe_id}"),
+        }
+    }
+
+    /// The signed-in account's name. Its id is in the same answer and is not
+    /// read: the name is what a person recognises.
+    async fn account_name(&self) -> Result<String> {
+        #[derive(serde::Deserialize)]
+        struct User {
+            #[serde(default)]
+            name: String,
+        }
+
+        let url = format!("{}/v1/users/authenticated", self.users);
+        let user: User = self.request_json(Method::GET, &url, None).await?;
+        if user.name.trim().is_empty() {
+            bail!("Roblox returned no name for the signed-in account");
+        }
+        Ok(user.name)
+    }
+
     async fn request_json<T: serde::de::DeserializeOwned>(
         &self,
         method: Method,
         url: &str,
         body: Option<serde_json::Value>,
     ) -> Result<T> {
-        let response = self.send(method, url, body).await?;
+        self.request_json_as(method, url, body, Credentials::Cookie)
+            .await
+    }
+
+    async fn request_json_as<T: serde::de::DeserializeOwned>(
+        &self,
+        method: Method,
+        url: &str,
+        body: Option<serde_json::Value>,
+        credentials: Credentials,
+    ) -> Result<T> {
+        let response = self.send(method, url, body, credentials).await?;
         let status = response.status();
         let text = response.text().await.context("reading the response body")?;
 
@@ -158,18 +240,19 @@ impl Api {
         method: Method,
         url: &str,
         body: Option<serde_json::Value>,
+        credentials: Credentials,
     ) -> Result<Response> {
         // Two attempts, and only two: the first can be rejected for a stale or
         // absent CSRF token, which the rejection itself hands back. A second
         // rejection is a real one.
         for attempt in 0..2 {
-            let mut request = self
-                .http
-                .request(method.clone(), url)
-                .header("Cookie", format!(".ROBLOSECURITY={}", self.cookie));
+            let mut request = self.http.request(method.clone(), url);
 
-            if let Some(token) = self.csrf.lock().expect("csrf mutex").as_ref() {
-                request = request.header("x-csrf-token", token);
+            if credentials == Credentials::Cookie {
+                request = request.header("Cookie", format!(".ROBLOSECURITY={}", self.cookie));
+                if let Some(token) = self.csrf.lock().expect("csrf mutex").as_ref() {
+                    request = request.header("x-csrf-token", token);
+                }
             }
             if let Some(json) = &body {
                 request = request.json(json);
@@ -220,6 +303,38 @@ impl Api {
 
         bail!("gave up after two CSRF attempts on {url}")
     }
+}
+
+/// What a request carries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Credentials {
+    /// The session cookie, and the CSRF token once Roblox has handed one out.
+    Cookie,
+    /// Nothing: for an endpoint that answers anyone.
+    None,
+}
+
+/// The confirmation, with whatever names could be read.
+fn filing_question(
+    universe_id: u64,
+    experience: Option<String>,
+    account: Option<String>,
+) -> String {
+    let experience = match experience {
+        Some(name) => format!("\"{}\" (universe {universe_id})", printable(&name)),
+        None => format!("universe {universe_id} (its name could not be read)"),
+    };
+    let account = match account {
+        Some(name) => format!("\"{}\"", printable(&name)),
+        None => "the signed-in account (its name could not be read)".to_string(),
+    };
+    format!("File this declaration with Roblox, for {experience}, as {account}?")
+}
+
+/// A name as it may be printed: one line, and no control character a terminal
+/// would act on. An experience's name is written by whoever owns it.
+fn printable(name: &str) -> String {
+    name.trim().chars().filter(|c| !c.is_control()).collect()
 }
 
 /// Where a 3xx pointed, by host alone.
@@ -279,10 +394,121 @@ pub fn resolve_cookie(explicit: Option<&str>, no_auto: bool, auto: bool) -> Resu
 mod tests {
     use super::{resolve_cookie, Api};
     use serde_json::json;
-    use wiremock::matchers::{any, header, method, path};
+    use wiremock::matchers::{any, header, method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     const UNIVERSE: u64 = 1234567890;
+    const USER_ID: u64 = 9876543210;
+
+    /// Both lookups answered by one mock server, whose paths do not overlap.
+    fn lookups_at(server: &MockServer) -> Api {
+        Api::with_base("cookie".to_string(), &server.uri())
+            .unwrap()
+            .with_lookup_bases(&server.uri(), &server.uri())
+    }
+
+    /// The question names the experience and the account, and the account by
+    /// name alone. The games endpoint is public and is sent no cookie.
+    #[tokio::test]
+    async fn the_filing_question_names_the_experience_and_the_account() {
+        let roblox = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/games"))
+            .and(query_param("universeIds", UNIVERSE.to_string()))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": [{ "id": UNIVERSE, "rootPlaceId": 109876543210987u64, "name": "Test Experience" }]
+            })))
+            .mount(&roblox)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/v1/users/authenticated"))
+            .and(header("Cookie", ".ROBLOSECURITY=cookie"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "id": USER_ID, "name": "test_account", "displayName": "Test Display"
+            })))
+            .mount(&roblox)
+            .await;
+
+        let question = lookups_at(&roblox).filing_question(UNIVERSE).await;
+
+        assert_eq!(
+            question,
+            format!(
+                "File this declaration with Roblox, for \"Test Experience\" (universe {UNIVERSE}), \
+                 as \"test_account\"?"
+            )
+        );
+        assert!(!question.contains(&USER_ID.to_string()), "{question}");
+
+        let received = roblox.received_requests().await.unwrap();
+        let games = received
+            .iter()
+            .find(|r| r.url.path() == "/v1/games")
+            .expect("the games lookup");
+        assert!(games.headers.get("cookie").is_none(), "{games:?}");
+    }
+
+    /// A lookup that fails is said in the question, which is still asked.
+    #[tokio::test]
+    async fn a_failed_lookup_is_said_and_the_question_still_asked() {
+        let roblox = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/games"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "data": [] })))
+            .mount(&roblox)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/v1/users/authenticated"))
+            .respond_with(ResponseTemplate::new(401).set_body_json(json!({ "errors": [] })))
+            .mount(&roblox)
+            .await;
+
+        let question = lookups_at(&roblox).filing_question(UNIVERSE).await;
+
+        assert_eq!(
+            question,
+            format!(
+                "File this declaration with Roblox, for universe {UNIVERSE} (its name could not \
+                 be read), as the signed-in account (its name could not be read)?"
+            )
+        );
+    }
+
+    /// The lookups go through the same client as the rest, which follows no
+    /// redirect: the cookie lookup would otherwise carry the CSRF token away.
+    #[tokio::test]
+    async fn a_lookup_answered_with_a_redirect_follows_nothing() {
+        let roblox = MockServer::start().await;
+        let elsewhere = MockServer::start().await;
+        let away = format!("http://localhost:{}/away", elsewhere.address().port());
+        Mock::given(any())
+            .respond_with(ResponseTemplate::new(302).insert_header("location", away.as_str()))
+            .mount(&roblox)
+            .await;
+        Mock::given(any())
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": [{ "name": "Elsewhere" }], "name": "elsewhere"
+            })))
+            .mount(&elsewhere)
+            .await;
+
+        let question = lookups_at(&roblox).filing_question(UNIVERSE).await;
+
+        assert!(!question.contains("lsewhere"), "{question}");
+        let received = elsewhere.received_requests().await.unwrap();
+        assert!(received.is_empty(), "{received:?}");
+    }
+
+    /// A name is printed on one line, without what a terminal would act on.
+    #[test]
+    fn a_name_is_printed_without_control_characters() {
+        let question = super::filing_question(
+            UNIVERSE,
+            Some("Bad\u{1b}[2J\nName".to_string()),
+            Some("account".to_string()),
+        );
+        assert!(question.contains("\"Bad[2JName\""), "{question}");
+    }
 
     /// A submission answered with a redirect is a failure, and the redirect is
     /// not followed. Followed, the POST arrived elsewhere as a GET carrying the

@@ -328,8 +328,9 @@ async fn run_submit(args: Submit) -> Result<ExitCode> {
         }
         Step::Ask => {
             println!();
+            let question = live.api.filing_question(live.universe_id).await;
             let confirmed = dialoguer::Confirm::new()
-                .with_prompt("File this declaration with Roblox?")
+                .with_prompt(question)
                 .default(false)
                 .interact()
                 .context("reading the confirmation")?;
