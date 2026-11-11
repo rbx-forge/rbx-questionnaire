@@ -279,6 +279,69 @@ fn fill_leaves_a_question_it_cannot_answer_blank_and_says_which() {
     assert_eq!(config.get("v-level").unwrap().answer, "");
 }
 
+/// The fill word is matched whole. By prefix, `no` answered "None of the
+/// above" and "Not applicable", which nobody asked it to.
+#[test]
+fn fill_matches_the_whole_option_text_never_a_prefix() {
+    let option = |id: &str, text: &str| Opt {
+        id: id.to_string(),
+        text: text.to_string(),
+        child_questions: Vec::new(),
+    };
+    let question = |id: &str, options: Vec<Opt>| Question {
+        id: id.to_string(),
+        text: format!("Question {id}?"),
+        question_type: "SingleSelect".to_string(),
+        options,
+    };
+
+    let q = Questionnaire {
+        id: "q1".to_string(),
+        sections: vec![
+            Section {
+                id: "s1".to_string(),
+                name: "Social".to_string(),
+                questions: vec![question(
+                    "social",
+                    vec![option("chat", "Chat"), option("none", "None of the above")],
+                )],
+            },
+            Section {
+                id: "s2".to_string(),
+                name: "Gambling".to_string(),
+                questions: vec![question(
+                    "gambling",
+                    vec![option("na", "Not applicable"), option("paid", "Paid")],
+                )],
+            },
+            Section {
+                id: "s3".to_string(),
+                name: "Violence".to_string(),
+                questions: vec![yes_no("v", "Any violence?")],
+            },
+        ],
+    };
+
+    // A blank already in the file goes through the same rule as a new entry.
+    let existing = "[[question]]\nid = \"social\"\ntopic = \"Social\"\nanswer = \"\"\n";
+    let (text, merged) = merge(Some(existing), &q, Some("NO")).unwrap();
+
+    assert_eq!(merged.filled, 1, "only the question that offers \"No\"");
+    assert_eq!(
+        merged.unfilled,
+        vec!["Social".to_string(), "Gambling".to_string()]
+    );
+
+    let config: Config = toml::from_str(&text).unwrap();
+    assert_eq!(config.get("social").unwrap().answer, "");
+    assert_eq!(config.get("gambling").unwrap().answer, "");
+    assert_eq!(
+        config.get("v").unwrap().answer,
+        "No",
+        "matched ignoring case"
+    );
+}
+
 #[test]
 fn a_file_that_is_not_an_array_of_tables_is_an_error_not_a_silent_overwrite() {
     let broken = "question = 3\n";

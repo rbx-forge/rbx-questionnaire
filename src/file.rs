@@ -14,7 +14,7 @@
 use anyhow::{Context, Result};
 use toml_edit::{value, ArrayOfTables, DocumentMut, Item, Table};
 
-use crate::model::{Match, Questionnaire};
+use crate::model::{Opt, Question, Questionnaire};
 
 const HEADER: &str = "\
 # What this experience declares about its content.
@@ -106,12 +106,12 @@ pub fn merge(
                 continue;
             };
 
-            match question.match_answer(wanted) {
-                Match::One(option) => {
+            match fill_option(question, wanted) {
+                Some(option) => {
                     table.insert("answer", value(&option.text));
                     report.filled += 1;
                 }
-                _ => report.unfilled.push(
+                None => report.unfilled.push(
                     questionnaire
                         .section_of(&id)
                         .unwrap_or(id.as_str())
@@ -137,12 +137,12 @@ pub fn merge(
             value(questionnaire.section_of(&question.id).unwrap_or_default()),
         );
 
-        let answer = match fill.map(|wanted| question.match_answer(wanted)) {
-            Some(Match::One(option)) => {
+        let answer = match fill.map(|wanted| fill_option(question, wanted)) {
+            Some(Some(option)) => {
                 report.filled += 1;
                 option.text.clone()
             }
-            Some(_) => {
+            Some(None) => {
                 // No option matches what was asked for. These are the follow-ups
                 // whose choices are Mild/Moderate rather than yes/no, and they
                 // are only reached if something above them says yes.
@@ -172,6 +172,21 @@ pub fn merge(
     }
 
     Ok((doc.to_string(), report))
+}
+
+/// The option `--fill` writes: the one whose text is the fill word, ignoring
+/// case, and nothing else.
+///
+/// Not the prefix rule a typed answer gets. A typed answer is read by the
+/// person who typed it, while a fill lands in every blank at once, and by
+/// prefix `no` also answers "None of the above" or "Not applicable", which are
+/// not the answer that was asked for.
+fn fill_option<'a>(question: &'a Question, wanted: &str) -> Option<&'a Opt> {
+    let wanted = wanted.trim();
+    question
+        .options
+        .iter()
+        .find(|o| o.text.trim().eq_ignore_ascii_case(wanted))
 }
 
 /// Comment out every line of `text`, not just the first.
