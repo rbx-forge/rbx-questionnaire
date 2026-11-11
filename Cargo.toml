@@ -52,7 +52,7 @@ reqwest = { version = "0.12", default-features = false, features = [
 # so a signed-in Studio is used only after the same yes every other tool asks
 # for, with the same notice.
 rbx-core = { git = "https://github.com/rbx-forge/rbx-core", tag = "v0.2.0" }
-dialoguer = "0.11"
+dialoguer = "0.12"
 
 [dev-dependencies]
 tempfile = "3"
