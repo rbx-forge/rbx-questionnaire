@@ -8,7 +8,8 @@
 //! breakage here should cost one small release and nothing else.
 
 use anyhow::{bail, Context, Result};
-use reqwest::{Client, Method, Response, StatusCode};
+use reqwest::redirect::Policy;
+use reqwest::{header, Client, Method, Response, StatusCode, Url};
 use std::time::Duration;
 
 use crate::model::{
@@ -20,6 +21,7 @@ const LOCALE: &str = "en_us";
 
 pub struct Api {
     http: Client,
+    base: String,
     cookie: String,
     /// Roblox hands this out on the first rejected write and expects it back on
     /// every subsequent one.
@@ -39,14 +41,25 @@ impl std::fmt::Debug for Api {
 
 impl Api {
     pub fn new(cookie: String) -> Result<Self> {
+        Self::with_base(cookie, BASE)
+    }
+
+    fn with_base(cookie: String, base: &str) -> Result<Self> {
+        // No redirect is followed. These endpoints answer where they are asked,
+        // so a 3xx is an error rather than an address to go to. Following one
+        // would send the CSRF token to wherever it points (reqwest drops only
+        // the cookie on a change of host), and would turn a submission's POST
+        // into a GET whose 200 reads as if the answers were filed.
         let http = Client::builder()
             .gzip(true)
             .timeout(Duration::from_secs(60))
+            .redirect(Policy::none())
             .build()
             .context("building the HTTP client")?;
 
         Ok(Self {
             http,
+            base: base.trim_end_matches('/').to_string(),
             cookie,
             csrf: std::sync::Mutex::new(None),
         })
@@ -54,21 +67,22 @@ impl Api {
 
     /// The id of the questionnaire this universe is currently being asked.
     pub async fn latest_id(&self, universe_id: u64) -> Result<String> {
-        let url = format!("{BASE}/questionnaires/{universe_id}/latest");
+        let base = &self.base;
+        let url = format!("{base}/questionnaires/{universe_id}/latest");
         let latest: Latest = self.request_json(Method::GET, &url, None).await?;
         Ok(latest.questionnaire_id)
     }
 
     /// The questions themselves.
     pub async fn questionnaire(&self, id: &str) -> Result<Questionnaire> {
-        let url = format!("{BASE}/questionnaires/{id}?localeCode={LOCALE}");
+        let url = format!("{}/questionnaires/{id}?localeCode={LOCALE}", self.base);
         let wrapper: Wrapper = self.request_json(Method::GET, &url, None).await?;
         Ok(wrapper.questionnaire)
     }
 
     /// Roblox's own opinion on whether these answers are complete.
     pub async fn validate(&self, id: &str, answers: &[Answer]) -> Result<ValidateResponse> {
-        let url = format!("{BASE}/responses/validate");
+        let url = format!("{}/responses/validate", self.base);
         let body = serde_json::json!({
             "questionnaireId": id,
             "response": { "answers": answers },
@@ -83,7 +97,7 @@ impl Api {
         id: &str,
         answers: &[Answer],
     ) -> Result<PreviewResponse> {
-        let url = format!("{BASE}/responses/preview?localeCode={LOCALE}");
+        let url = format!("{}/responses/preview?localeCode={LOCALE}", self.base);
         let body = serde_json::json!({
             "universeId": universe_id,
             "questionnaireId": id,
@@ -111,7 +125,7 @@ impl Api {
             );
         }
 
-        let url = format!("{BASE}/responses/{universe_id}/submissions");
+        let url = format!("{}/responses/{universe_id}/submissions", self.base);
         let body = serde_json::json!({
             "questionnaireId": id,
             "response": { "answers": answers },
@@ -166,6 +180,15 @@ impl Api {
                 .await
                 .with_context(|| format!("calling {url}"))?;
 
+            if response.status().is_redirection() {
+                bail!(
+                    "Roblox answered HTTP {} for {url}, {}. These endpoints are \
+                     undocumented and Roblox can change them without notice",
+                    response.status(),
+                    redirect_target(&response)
+                );
+            }
+
             if response.status() == StatusCode::FORBIDDEN {
                 if let Some(token) = response.headers().get("x-csrf-token") {
                     let token = token.to_str().unwrap_or_default().to_string();
@@ -196,6 +219,26 @@ impl Api {
         }
 
         bail!("gave up after two CSRF attempts on {url}")
+    }
+}
+
+/// Where a 3xx pointed, by host alone.
+///
+/// The body is never read and the `Location` never printed whole: a redirect
+/// can carry a signed address in its path or query, and that is a working link
+/// to whatever it signs.
+fn redirect_target(response: &Response) -> String {
+    let host = response
+        .headers()
+        .get(header::LOCATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|location| response.url().join(location).ok())
+        .as_ref()
+        .and_then(Url::host_str)
+        .map(str::to_string);
+    match host {
+        Some(host) => format!("a redirect to {host}, which this tool does not follow"),
+        None => "a redirect with no readable location, which this tool does not follow".to_string(),
     }
 }
 
@@ -235,6 +278,91 @@ pub fn resolve_cookie(explicit: Option<&str>, no_auto: bool, auto: bool) -> Resu
 #[cfg(test)]
 mod tests {
     use super::{resolve_cookie, Api};
+    use serde_json::json;
+    use wiremock::matchers::{any, header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    const UNIVERSE: u64 = 1234567890;
+
+    /// A submission answered with a redirect is a failure, and the redirect is
+    /// not followed. Followed, the POST arrived elsewhere as a GET carrying the
+    /// CSRF token, and that host's 200 read as a filed declaration.
+    #[tokio::test]
+    async fn a_submission_answered_with_a_redirect_fails_and_follows_nothing() {
+        let roblox = MockServer::start().await;
+        let elsewhere = MockServer::start().await;
+        let submissions = format!("/responses/{UNIVERSE}/submissions");
+
+        Mock::given(method("GET"))
+            .and(path(format!("/questionnaires/{UNIVERSE}/latest")))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({ "questionnaireId": "q1" })),
+            )
+            .mount(&roblox)
+            .await;
+        // The first POST is refused for its missing token, which the refusal
+        // hands out, so the one that meets the redirect carries a token.
+        Mock::given(method("POST"))
+            .and(path(submissions.as_str()))
+            .and(header("x-csrf-token", "csrf-token"))
+            .respond_with(ResponseTemplate::new(302).insert_header(
+                "location",
+                format!(
+                    "http://localhost:{}/filed?signature=abc",
+                    elsewhere.address().port()
+                ),
+            ))
+            .with_priority(1)
+            .mount(&roblox)
+            .await;
+        Mock::given(method("POST"))
+            .and(path(submissions.as_str()))
+            .respond_with(ResponseTemplate::new(403).insert_header("x-csrf-token", "csrf-token"))
+            .mount(&roblox)
+            .await;
+        Mock::given(any())
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({ "submissionId": "filed" })),
+            )
+            .mount(&elsewhere)
+            .await;
+
+        let api = Api::with_base("cookie".to_string(), &roblox.uri()).unwrap();
+        let result = api.submit(UNIVERSE, "q1", &[]).await;
+
+        assert!(result.is_err(), "{result:?}");
+        let received = elsewhere.received_requests().await.unwrap();
+        assert!(received.is_empty(), "{received:?}");
+    }
+
+    /// The error names the status and the host the redirect pointed to, and
+    /// neither the body nor the rest of the `Location`, which can be a signed
+    /// address.
+    #[tokio::test]
+    async fn a_redirect_error_names_the_host_alone() {
+        let roblox = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path(format!("/questionnaires/{UNIVERSE}/latest")))
+            .respond_with(
+                ResponseTemplate::new(302)
+                    .insert_header(
+                        "location",
+                        "http://redirect-target.invalid/signed-path?signature=signed-query",
+                    )
+                    .set_body_string("redirect-body-that-must-not-show"),
+            )
+            .mount(&roblox)
+            .await;
+
+        let api = Api::with_base("cookie".to_string(), &roblox.uri()).unwrap();
+        let err = format!("{:#}", api.latest_id(UNIVERSE).await.unwrap_err());
+
+        assert!(err.contains("302"), "{err}");
+        assert!(err.contains("redirect-target.invalid"), "{err}");
+        assert!(!err.contains("signed-path"), "{err}");
+        assert!(!err.contains("signed-query"), "{err}");
+        assert!(!err.contains("redirect-body-that-must-not-show"), "{err}");
+    }
 
     /// The derived Debug printed the cookie, so any `{:?}` of the client, in
     /// an error or a log line, carried the account.

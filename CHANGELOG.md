@@ -2,9 +2,13 @@
 
 ## [Unreleased]
 
+### Security
+
+- **A redirect from Roblox is refused, never followed.** These endpoints answer where they are asked, so a 3xx now fails the command with its status and the host it pointed to, and nothing more: not its body, not the rest of the address, which can be a signed link. Followed, it sent the CSRF token to that host, and turned a `submit` into a `GET` there whose answer could read as a filed declaration.
+
 ### Changed
 
-- **Built on rbx-core 0.2.0, with no change in behavior.** This tool takes one thing from it, the cookie chain, and that is unchanged: `--cookie` or `RBX_COOKIE` first, an empty value is no cookie, and a signed-in Studio is used only after a yes, `--auto-cookie` or `--no-auto-cookie` answering in advance. The requests to Roblox, the CSRF token included, go through this tool's own client as before.
+- Built on rbx-core 0.2.0. The cookie chain this tool takes from it is unchanged: `--cookie` or `RBX_COOKIE` first, an empty value is no cookie, and a signed-in Studio is used only after a yes, `--auto-cookie` or `--no-auto-cookie` answering in advance.
 
 ## [0.2.2] - 2026-11-11
 
