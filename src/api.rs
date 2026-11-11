@@ -18,13 +18,23 @@ use crate::model::{
 const BASE: &str = "https://apis.roblox.com/experience-questionnaire/v1";
 const LOCALE: &str = "en_us";
 
-#[derive(Debug)]
 pub struct Api {
     http: Client,
     cookie: String,
     /// Roblox hands this out on the first rejected write and expects it back on
     /// every subsequent one.
     csrf: std::sync::Mutex<Option<String>>,
+}
+
+/// Written by hand so that no `{:?}` ever prints the session cookie, which is
+/// a whole account, or the CSRF token that goes with it.
+impl std::fmt::Debug for Api {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Api")
+            .field("cookie", &"<redacted>")
+            .field("csrf", &"<redacted>")
+            .finish_non_exhaustive()
+    }
 }
 
 impl Api {
@@ -224,7 +234,23 @@ pub fn resolve_cookie(explicit: Option<&str>, no_auto: bool, auto: bool) -> Resu
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_cookie;
+    use super::{resolve_cookie, Api};
+
+    /// The derived Debug printed the cookie, so any `{:?}` of the client, in
+    /// an error or a log line, carried the account.
+    #[test]
+    fn debug_never_shows_the_cookie_or_the_csrf_token() {
+        let api = Api::new("cookie-value-that-must-not-show".to_string()).unwrap();
+        *api.csrf.lock().unwrap() = Some("csrf-value-that-must-not-show".to_string());
+
+        let shown = format!("{api:?}");
+
+        assert!(
+            !shown.contains("cookie-value-that-must-not-show"),
+            "{shown}"
+        );
+        assert!(!shown.contains("csrf-value-that-must-not-show"), "{shown}");
+    }
 
     /// A cookie passed on purpose is used as given, whatever the Studio flags.
     #[test]
