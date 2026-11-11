@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-11-11
+
 ### Security
 
 - `rustls` 0.23.46, `rustls-webpki` 0.103.16 and `tokio` 1.54.1, for RUSTSEC-2026-0285, -0346, -0348, -0349, -0382 and -0386. The one to read is -0382: certificate verification could accept distrusted intermediates, on the connection that carries the session cookie.
